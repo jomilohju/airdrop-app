@@ -81,6 +81,7 @@ export function useAirDrop() {
     setTheme(newTheme);
     localStorage.setItem('airdrop_theme', newTheme);
   }, []);
+  const [isConnected, setIsConnected] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>(() => {
     const saved = localStorage.getItem('airdrop_history');
     return saved ? JSON.parse(saved) : [];
