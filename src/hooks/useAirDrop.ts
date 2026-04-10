@@ -2,6 +2,12 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { v4 as uuidv4 } from 'uuid';
 import { Device as CapacitorDevice } from '@capacitor/device';
+import { Capacitor } from '@capacitor/core';
+
+// Use the current window origin for web, or the production URL for native apps
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (Capacitor.isNativePlatform() 
+  ? 'https://ais-pre-agdlszchovxizrfnymytsj-260210615413.europe-west2.run.app' 
+  : window.location.origin);
 
 export interface Device {
   id: string;
@@ -19,12 +25,80 @@ export interface TransferState {
   totalFiles?: number;
 }
 
+export interface HistoryItem {
+  id: string;
+  name: string;
+  size: number;
+  timestamp: number;
+  type: 'sent' | 'received';
+  deviceName: string;
+}
+
 export function useAirDrop() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [myDevice, setMyDevice] = useState<Device | null>(null);
   const [isDiscoverable, setIsDiscoverable] = useState(true);
+  const [theme, setTheme] = useState<'light' | 'dark' | 'system'>(() => {
+    const saved = localStorage.getItem('airdrop_theme');
+    return (saved as 'light' | 'dark' | 'system') || 'system';
+  });
+  const [autoAccept, setAutoAccept] = useState(() => localStorage.getItem('airdrop_auto_accept') === 'true');
+  const [soundEnabled, setSoundEnabled] = useState(() => localStorage.getItem('airdrop_sound_enabled') !== 'false');
+
+  const playSound = useCallback((type: 'notify' | 'success') => {
+    if (!soundEnabled) return;
+    const sounds = {
+      notify: 'https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3',
+      success: 'https://assets.mixkit.co/active_storage/sfx/1435/1435-preview.mp3'
+    };
+    const audio = new Audio(sounds[type]);
+    audio.play().catch(e => console.log('Audio play blocked:', e));
+  }, [soundEnabled]);
+
+  useEffect(() => {
+    const root = window.document.documentElement;
+    const applyTheme = (t: 'light' | 'dark' | 'system') => {
+      root.classList.remove('light', 'dark');
+      if (t === 'system') {
+        const systemTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        root.classList.add(systemTheme);
+      } else {
+        root.classList.add(t);
+      }
+    };
+
+    applyTheme(theme);
+
+    if (theme === 'system') {
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      const handleChange = () => applyTheme('system');
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    }
+  }, [theme]);
+
+  const updateTheme = useCallback((newTheme: 'light' | 'dark' | 'system') => {
+    setTheme(newTheme);
+    localStorage.setItem('airdrop_theme', newTheme);
+  }, []);
+  const [history, setHistory] = useState<HistoryItem[]>(() => {
+    const saved = localStorage.getItem('airdrop_history');
+    return saved ? JSON.parse(saved) : [];
+  });
   const [transferState, setTransferState] = useState<TransferState>({ status: 'idle', progress: 0 });
   const [incomingOffer, setIncomingOffer] = useState<{ caller: Device, offer: RTCSessionDescriptionInit } | null>(null);
+
+  useEffect(() => {
+    if (incomingOffer && !autoAccept) {
+      playSound('notify');
+    }
+  }, [incomingOffer, autoAccept, playSound]);
+
+  useEffect(() => {
+    if (transferState.status === 'completed') {
+      playSound('success');
+    }
+  }, [transferState.status, playSound]);
   
   const socketRef = useRef<Socket | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
@@ -33,6 +107,34 @@ export function useAirDrop() {
   const receivedSizeRef = useRef<number>(0);
   const expectedSizeRef = useRef<number>(0);
   const expectedNameRef = useRef<string>('');
+
+  const addToHistory = useCallback((item: Omit<HistoryItem, 'id' | 'timestamp'>) => {
+    const newItem: HistoryItem = {
+      ...item,
+      id: uuidv4(),
+      timestamp: Date.now()
+    };
+    setHistory(prev => {
+      const updated = [newItem, ...prev].slice(0, 20); // Keep last 20
+      localStorage.setItem('airdrop_history', JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
+  const clearHistory = useCallback(() => {
+    setHistory([]);
+    localStorage.removeItem('airdrop_history');
+  }, []);
+
+  const toggleAutoAccept = useCallback((val: boolean) => {
+    setAutoAccept(val);
+    localStorage.setItem('airdrop_auto_accept', String(val));
+  }, []);
+
+  const toggleSound = useCallback((val: boolean) => {
+    setSoundEnabled(val);
+    localStorage.setItem('airdrop_sound_enabled', String(val));
+  }, []);
 
   useEffect(() => {
     const initDevice = async () => {
@@ -48,7 +150,6 @@ export function useAirDrop() {
                      info.operatingSystem === 'windows' ? 'Windows' : 'Desktop';
         defaultName = info.name || '';
       } catch (e) {
-        // Fallback for standard web
         const userAgent = navigator.userAgent;
         if (/android/i.test(userAgent)) deviceType = 'Android';
         else if (/iPad|iPhone|iPod/.test(userAgent)) deviceType = 'iOS';
@@ -68,14 +169,12 @@ export function useAirDrop() {
       const device = { id, name, deviceType, socketId: '' };
       setMyDevice(device);
 
-      // Connect to signaling server
-      const socket = io();
+      const socket = io(SOCKET_URL);
       socketRef.current = socket;
 
       socket.on('connect', () => {
         device.socketId = socket.id!;
         setMyDevice({ ...device });
-        // Only register if discoverable
         if (isDiscoverable) {
           socket.emit('register', device);
         }
@@ -96,9 +195,14 @@ export function useAirDrop() {
         setDevices(prev => prev.filter(d => d.socketId !== socketId));
       });
 
-      // WebRTC Signaling
       socket.on('offer', async ({ offer, caller }) => {
-        setIncomingOffer({ caller, offer });
+        if (autoAccept) {
+          // We can't easily call acceptOffer here because it depends on state
+          // but we can set the offer and let a useEffect handle it
+          setIncomingOffer({ caller, offer });
+        } else {
+          setIncomingOffer({ caller, offer });
+        }
       });
 
       socket.on('answer', async ({ answer }) => {
@@ -124,7 +228,7 @@ export function useAirDrop() {
       if (socketRef.current) socketRef.current.disconnect();
       if (peerConnectionRef.current) peerConnectionRef.current.close();
     };
-  }, [isDiscoverable]); // Re-run if discoverability changes initially, though we handle toggles separately
+  }, [isDiscoverable, autoAccept]);
 
   const toggleDiscoverable = useCallback((discoverable: boolean) => {
     setIsDiscoverable(discoverable);
@@ -142,7 +246,6 @@ export function useAirDrop() {
     const updatedDevice = { ...myDevice, name: newName };
     setMyDevice(updatedDevice);
     localStorage.setItem('airdrop_custom_name', newName);
-    // Re-register to broadcast name change if discoverable
     if (isDiscoverable) {
       socketRef.current.emit('register', updatedDevice);
     }
@@ -171,7 +274,7 @@ export function useAirDrop() {
     return pc;
   }, []);
 
-  const setupDataChannel = useCallback((channel: RTCDataChannel) => {
+  const setupDataChannel = useCallback((channel: RTCDataChannel, remoteDeviceName: string) => {
     channel.binaryType = 'arraybuffer';
     
     channel.onmessage = (event) => {
@@ -196,7 +299,6 @@ export function useAirDrop() {
           setTimeout(() => setTransferState({ status: 'idle', progress: 0 }), 3000);
         }
       } else {
-        // File chunk
         fileBufferRef.current.push(event.data);
         receivedSizeRef.current += event.data.byteLength;
         
@@ -204,7 +306,6 @@ export function useAirDrop() {
         setTransferState(prev => ({ ...prev, progress }));
 
         if (receivedSizeRef.current === expectedSizeRef.current) {
-          // Download this file
           const blob = new Blob(fileBufferRef.current);
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
@@ -212,12 +313,19 @@ export function useAirDrop() {
           a.download = expectedNameRef.current;
           a.click();
           URL.revokeObjectURL(url);
+          
+          addToHistory({
+            name: expectedNameRef.current,
+            size: expectedSizeRef.current,
+            type: 'received',
+            deviceName: remoteDeviceName
+          });
         }
       }
     };
 
     dataChannelRef.current = channel;
-  }, []);
+  }, [addToHistory]);
 
   const sendFiles = useCallback(async (targetDevice: Device, files: File[]) => {
     if (!socketRef.current || !myDevice || files.length === 0) return;
@@ -228,7 +336,7 @@ export function useAirDrop() {
     peerConnectionRef.current = pc;
 
     const channel = pc.createDataChannel('file-transfer');
-    setupDataChannel(channel);
+    setupDataChannel(channel, targetDevice.name);
 
     channel.onopen = async () => {
       for (let i = 0; i < files.length; i++) {
@@ -243,7 +351,6 @@ export function useAirDrop() {
           totalFiles: files.length
         }));
         
-        // Send file header
         channel.send(JSON.stringify({ 
           type: 'file-start', 
           name: file.name, 
@@ -253,34 +360,46 @@ export function useAirDrop() {
           total: files.length
         }));
 
-        // Send chunks
-        await new Promise<void>((resolve) => {
-          const chunkSize = 16384; // 16KB chunks
+        await new Promise<void>((resolve, reject) => {
+          const chunkSize = 16384;
           let offset = 0;
 
           const readSlice = (o: number) => {
             const slice = file.slice(offset, o + chunkSize);
             const reader = new FileReader();
+            reader.onerror = () => reject(new Error('File read error'));
             reader.onload = (e) => {
               if (channel.readyState === 'open') {
-                channel.send(e.target?.result as ArrayBuffer);
-                offset += chunkSize;
-                
-                const progress = Math.round((offset / file.size) * 100);
-                setTransferState(prev => ({ ...prev, progress: Math.min(progress, 100) }));
+                try {
+                  channel.send(e.target?.result as ArrayBuffer);
+                  offset += chunkSize;
+                  
+                  const progress = Math.round((offset / file.size) * 100);
+                  setTransferState(prev => ({ ...prev, progress: Math.min(progress, 100) }));
 
-                if (offset < file.size) {
-                  if (channel.bufferedAmount > channel.bufferedAmountLowThreshold) {
-                    channel.onbufferedamountlow = () => {
-                      channel.onbufferedamountlow = null;
+                  if (offset < file.size) {
+                    if (channel.bufferedAmount > channel.bufferedAmountLowThreshold) {
+                      channel.onbufferedamountlow = () => {
+                        channel.onbufferedamountlow = null;
+                        readSlice(offset);
+                      };
+                    } else {
                       readSlice(offset);
-                    };
+                    }
                   } else {
-                    readSlice(offset);
+                    addToHistory({
+                      name: file.name,
+                      size: file.size,
+                      type: 'sent',
+                      deviceName: targetDevice.name
+                    });
+                    resolve();
                   }
-                } else {
-                  resolve();
+                } catch (err) {
+                  reject(err);
                 }
+              } else {
+                reject(new Error('Channel closed during transfer'));
               }
             };
             reader.readAsArrayBuffer(slice);
@@ -302,7 +421,7 @@ export function useAirDrop() {
       offer,
       caller: myDevice
     });
-  }, [createPeerConnection, setupDataChannel, myDevice]);
+  }, [createPeerConnection, setupDataChannel, myDevice, addToHistory]);
 
   const acceptOffer = useCallback(async () => {
     if (!incomingOffer || !socketRef.current) return;
@@ -313,7 +432,7 @@ export function useAirDrop() {
     peerConnectionRef.current = pc;
 
     pc.ondatachannel = (event) => {
-      setupDataChannel(event.channel);
+      setupDataChannel(event.channel, incomingOffer.caller.name);
     };
 
     await pc.setRemoteDescription(new RTCSessionDescription(incomingOffer.offer));
@@ -327,6 +446,13 @@ export function useAirDrop() {
 
     setIncomingOffer(null);
   }, [incomingOffer, createPeerConnection, setupDataChannel]);
+
+  // Auto-accept effect
+  useEffect(() => {
+    if (autoAccept && incomingOffer && transferState.status === 'idle') {
+      acceptOffer();
+    }
+  }, [autoAccept, incomingOffer, transferState.status, acceptOffer]);
 
   const rejectOffer = useCallback(() => {
     setIncomingOffer(null);
@@ -342,6 +468,14 @@ export function useAirDrop() {
     rejectOffer,
     updateMyName,
     isDiscoverable,
-    toggleDiscoverable
+    toggleDiscoverable,
+    autoAccept,
+    toggleAutoAccept,
+    soundEnabled,
+    toggleSound,
+    theme,
+    updateTheme,
+    history,
+    clearHistory
   };
 }

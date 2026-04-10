@@ -6,7 +6,7 @@ import path from "path";
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT || 3000;
   const httpServer = createServer(app);
   const io = new Server(httpServer, {
     cors: {
@@ -21,26 +21,28 @@ async function startServer() {
   // but since we want "automatic discovery", we can group them by their public IP.
   // In a real environment behind a proxy, req.ip might be the proxy's IP.
   // We'll use a simple global discovery for now, or group by a derived network ID.
+  // Global device map for public discovery
   const devices = new Map();
 
   io.on("connection", (socket) => {
     console.log("Device connected:", socket.id);
 
     socket.on("register", (deviceInfo) => {
-      // deviceInfo: { id, name, deviceType }
       devices.set(socket.id, { ...deviceInfo, socketId: socket.id });
       
-      // Broadcast to all other devices
+      // Broadcast to EVERYONE using the app globally
       socket.broadcast.emit("device-joined", devices.get(socket.id));
       
-      // Send current devices to the new device
+      // Send all currently active global devices to the new device
       const otherDevices = Array.from(devices.values()).filter(d => d.socketId !== socket.id);
       socket.emit("current-devices", otherDevices);
     });
 
     socket.on("unregister", () => {
-      devices.delete(socket.id);
-      socket.broadcast.emit("device-left", socket.id);
+      if (devices.has(socket.id)) {
+        socket.broadcast.emit("device-left", socket.id);
+        devices.delete(socket.id);
+      }
     });
 
     // WebRTC Signaling
@@ -57,9 +59,10 @@ async function startServer() {
     });
 
     socket.on("disconnect", () => {
-      console.log("Device disconnected:", socket.id);
-      devices.delete(socket.id);
-      io.emit("device-left", socket.id);
+      if (devices.has(socket.id)) {
+        io.emit("device-left", socket.id);
+        devices.delete(socket.id);
+      }
     });
   });
 

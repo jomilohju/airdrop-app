@@ -1,5 +1,5 @@
 {
-  "name": "",
-  "description": "",
+  "name": "AirDrop clone",
+  "description": "A cross-platform peer-to-peer file sharing application that works globally.",
   "requestFramePermissions": []
 }
