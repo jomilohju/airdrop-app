@@ -6,13 +6,13 @@ import {
   Loader2, Send, Edit2, Check, Eye, EyeOff, Settings, 
   History, Trash2, Clock, ChevronRight, X, Shield, ShieldCheck,
   Moon, Sun, Monitor as MonitorIcon, Volume2, VolumeX,
-  Download, Share2
+  Download, Share2, RefreshCw
 } from 'lucide-react';
 
 export default function App() {
   const { 
     devices, myDevice, transferState, incomingOffer, 
-    sendFiles, acceptOffer, rejectOffer, updateMyName, 
+    sendFiles, acceptOffer, rejectOffer, refreshDevices, updateMyName, 
     isDiscoverable, toggleDiscoverable, autoAccept, 
     toggleAutoAccept, soundEnabled, toggleSound, 
     theme, updateTheme, history, clearHistory 
@@ -24,6 +24,7 @@ export default function App() {
   const [editNameValue, setEditNameValue] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [installPrompt, setInstallPrompt] = useState<any>(null);
 
   useEffect(() => {
@@ -34,6 +35,12 @@ export default function App() {
     window.addEventListener('beforeinstallprompt', handler);
     return () => window.removeEventListener('beforeinstallprompt', handler);
   }, []);
+
+  const handleRefresh = () => {
+    setIsRefreshing(true);
+    refreshDevices();
+    setTimeout(() => setIsRefreshing(false), 1000);
+  };
 
   const handleInstall = async () => {
     if (!installPrompt) return;
@@ -122,13 +129,22 @@ export default function App() {
         {/* Top Actions */}
         <div className="absolute top-8 right-8 flex gap-3">
           <button 
+            onClick={handleRefresh}
+            title="Refresh Devices"
+            className="p-2 rounded-full bg-[var(--glass-bg)] hover:bg-[var(--glass-border)] transition-colors border border-[var(--glass-border)] shadow-sm"
+          >
+            <RefreshCw className={`w-5 h-5 text-[var(--text-color)] ${isRefreshing ? 'animate-spin' : ''}`} />
+          </button>
+          <button 
             onClick={() => setShowHistory(true)}
+            title="History"
             className="p-2 rounded-full bg-[var(--glass-bg)] hover:bg-[var(--glass-border)] transition-colors border border-[var(--glass-border)] shadow-sm"
           >
             <History className="w-5 h-5 text-[var(--text-color)]" />
           </button>
           <button 
             onClick={() => setShowSettings(true)}
+            title="Settings"
             className="p-2 rounded-full bg-[var(--glass-bg)] hover:bg-[var(--glass-border)] transition-colors border border-[var(--glass-border)] shadow-sm"
           >
             <Settings className="w-5 h-5 text-[var(--text-color)]" />

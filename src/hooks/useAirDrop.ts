@@ -103,6 +103,7 @@ export function useAirDrop() {
   const socketRef = useRef<Socket | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
+  const pendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
   const fileBufferRef = useRef<ArrayBuffer[]>([]);
   const receivedSizeRef = useRef<number>(0);
   const expectedSizeRef = useRef<number>(0);
@@ -208,16 +209,26 @@ export function useAirDrop() {
       socket.on('answer', async ({ answer }) => {
         if (peerConnectionRef.current) {
           await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+          for (const candidate of pendingCandidatesRef.current) {
+            try {
+              await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (e) {
+              console.error('Error adding pending ice candidate', e);
+            }
+          }
+          pendingCandidatesRef.current = [];
         }
       });
 
       socket.on('ice-candidate', async ({ candidate }) => {
-        if (peerConnectionRef.current) {
+        if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
           try {
             await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
           } catch (e) {
             console.error('Error adding received ice candidate', e);
           }
+        } else {
+          pendingCandidatesRef.current.push(candidate);
         }
       });
     };
@@ -252,6 +263,7 @@ export function useAirDrop() {
   }, [myDevice, isDiscoverable]);
 
   const createPeerConnection = useCallback((targetSocketId: string) => {
+    pendingCandidatesRef.current = []; // Clear any stale candidates
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
     });
@@ -436,6 +448,16 @@ export function useAirDrop() {
     };
 
     await pc.setRemoteDescription(new RTCSessionDescription(incomingOffer.offer));
+    
+    for (const candidate of pendingCandidatesRef.current) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (e) {
+        console.error('Error adding pending ice candidate', e);
+      }
+    }
+    pendingCandidatesRef.current = [];
+
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
@@ -458,6 +480,12 @@ export function useAirDrop() {
     setIncomingOffer(null);
   }, []);
 
+  const refreshDevices = useCallback(() => {
+    if (!socketRef.current || !myDevice || !isDiscoverable) return;
+    setDevices([]); // Clear current devices to trigger the scanning animation
+    socketRef.current.emit('register', myDevice);
+  }, [myDevice, isDiscoverable]);
+
   return {
     devices,
     myDevice,
@@ -466,6 +494,7 @@ export function useAirDrop() {
     sendFiles,
     acceptOffer,
     rejectOffer,
+    refreshDevices,
     updateMyName,
     isDiscoverable,
     toggleDiscoverable,
