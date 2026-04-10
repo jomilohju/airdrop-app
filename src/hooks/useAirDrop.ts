@@ -373,7 +373,10 @@ export function useAirDrop() {
         }));
 
         await new Promise<void>((resolve, reject) => {
-          const chunkSize = 16384;
+          // Increased chunk size to 128KB for much faster transfers
+          const chunkSize = 131072; 
+          // Set a higher buffer threshold (1MB) to keep the network saturated
+          channel.bufferedAmountLowThreshold = 1048576;
           let offset = 0;
 
           const readSlice = (o: number) => {
