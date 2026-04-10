@@ -126,6 +126,12 @@ export default function App() {
 
       <div className="max-w-2xl w-full bg-[var(--glass-bg)] backdrop-blur-3xl rounded-[40px] shadow-[0_8px_32px_rgba(0,0,0,0.15)] border border-[var(--glass-border)] p-8 md:p-12 relative z-10">
         
+        {/* App Title */}
+        <h1 className="absolute top-8 left-8 text-2xl font-bold tracking-tight text-[var(--text-color)] flex items-center gap-2">
+          <Share2 className="w-6 h-6 text-blue-500" />
+          DropTop
+        </h1>
+
         {/* Top Actions */}
         <div className="absolute top-8 right-8 flex gap-3">
           <button 
@@ -152,9 +158,7 @@ export default function App() {
         </div>
 
         {/* Header */}
-        <div className="text-center mb-12">
-          <h1 className="text-3xl font-semibold tracking-tight mb-4">AirDrop</h1>
-          
+        <div className="text-center mb-12 mt-12">
           <div className="flex flex-col items-center justify-center gap-4 text-sm">
             
             {/* Visibility Toggle */}
