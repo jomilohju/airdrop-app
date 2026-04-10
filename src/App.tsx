@@ -6,13 +6,13 @@ import {
   Loader2, Send, Edit2, Check, Eye, EyeOff, Settings, 
   History, Trash2, Clock, ChevronRight, X, Shield, ShieldCheck,
   Moon, Sun, Monitor as MonitorIcon, Volume2, VolumeX,
-  Download, Share2, RefreshCw
+  Download, Share2, RefreshCw, MessageSquare, Copy
 } from 'lucide-react';
 
 export default function App() {
   const { 
-    devices, myDevice, transferState, incomingOffer, 
-    sendFiles, acceptOffer, rejectOffer, refreshDevices, updateMyName, 
+    devices, myDevice, transferState, incomingOffer, incomingText,
+    sendFiles, sendText, acceptOffer, rejectOffer, refreshDevices, clearIncomingText, updateMyName, 
     isDiscoverable, toggleDiscoverable, autoAccept, 
     toggleAutoAccept, soundEnabled, toggleSound, 
     theme, updateTheme, history, clearHistory 
@@ -20,6 +20,8 @@ export default function App() {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
+  const [actionModalDevice, setActionModalDevice] = useState<Device | null>(null);
+  const [textToSend, setTextToSend] = useState('');
   const [isEditingName, setIsEditingName] = useState(false);
   const [editNameValue, setEditNameValue] = useState('');
   const [showSettings, setShowSettings] = useState(false);
@@ -52,8 +54,23 @@ export default function App() {
   };
 
   const handleDeviceClick = (device: Device) => {
-    setSelectedDevice(device);
-    fileInputRef.current?.click();
+    setActionModalDevice(device);
+  };
+
+  const handleSendFileClick = () => {
+    if (actionModalDevice) {
+      setSelectedDevice(actionModalDevice);
+      fileInputRef.current?.click();
+      setActionModalDevice(null);
+    }
+  };
+
+  const handleSendTextClick = () => {
+    if (actionModalDevice && textToSend.trim()) {
+      sendText(actionModalDevice, textToSend.trim());
+      setTextToSend('');
+      setActionModalDevice(null);
+    }
   };
 
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -319,6 +336,122 @@ export default function App() {
         </AnimatePresence>
       </div>
 
+      {/* Action Modal (Send File or Text) */}
+      <AnimatePresence>
+        {actionModalDevice && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              className="bg-[var(--glass-bg)] backdrop-blur-2xl rounded-[32px] p-8 max-w-sm w-full shadow-2xl border border-[var(--glass-border)]"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-xl font-semibold text-[var(--text-color)]">Send to {actionModalDevice.name}</h2>
+                <button onClick={() => setActionModalDevice(null)} className="p-2 rounded-full hover:bg-gray-100/20 transition-colors text-[var(--text-color)]">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <button 
+                  onClick={handleSendFileClick}
+                  className="w-full flex items-center justify-center gap-2 py-4 px-6 rounded-2xl bg-blue-500 hover:bg-blue-600 text-white font-semibold transition-colors"
+                >
+                  <File className="w-5 h-5" />
+                  Send File(s)
+                </button>
+
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <div className="w-full border-t border-[var(--glass-border)]"></div>
+                  </div>
+                  <div className="relative flex justify-center text-sm">
+                    <span className="px-2 bg-[var(--glass-bg)] text-[var(--secondary-text)]">or send text</span>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <textarea
+                    value={textToSend}
+                    onChange={(e) => setTextToSend(e.target.value)}
+                    placeholder="Type a message, link, or snippet..."
+                    className="w-full h-24 p-4 rounded-2xl bg-[var(--card-bg)] border border-[var(--glass-border)] text-[var(--text-color)] placeholder:text-[var(--secondary-text)] focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                  />
+                  <button 
+                    onClick={handleSendTextClick}
+                    disabled={!textToSend.trim()}
+                    className="w-full flex items-center justify-center gap-2 py-4 px-6 rounded-2xl bg-gray-100/20 hover:bg-gray-100/30 text-[var(--text-color)] font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <MessageSquare className="w-5 h-5" />
+                    Send Text
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Incoming Text Modal */}
+      <AnimatePresence>
+        {incomingText && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              className="bg-[var(--glass-bg)] backdrop-blur-2xl rounded-[32px] p-8 max-w-sm w-full shadow-2xl border border-[var(--glass-border)]"
+            >
+              <div className="mb-6 flex justify-center">
+                <div className="p-5 bg-blue-500/10 rounded-3xl">
+                  <MessageSquare className="w-8 h-8 text-blue-500" />
+                </div>
+              </div>
+              <h2 className="text-xl font-semibold mb-2 text-[var(--text-color)] text-center">New Message</h2>
+              <p className="text-sm text-[var(--secondary-text)] mb-6 text-center">
+                From <span className="font-semibold text-[var(--text-color)]">"{incomingText.sender}"</span>
+              </p>
+              
+              <div className="bg-[var(--card-bg)] border border-[var(--glass-border)] rounded-2xl p-4 mb-6 max-h-48 overflow-y-auto">
+                <p className="text-[var(--text-color)] whitespace-pre-wrap break-words text-sm">
+                  {incomingText.text}
+                </p>
+              </div>
+
+              <div className="flex gap-3">
+                <button 
+                  onClick={clearIncomingText}
+                  className="flex-1 py-4 px-6 rounded-2xl bg-gray-100/20 hover:bg-gray-100/30 text-[var(--text-color)] font-semibold transition-colors"
+                >
+                  Close
+                </button>
+                <button 
+                  onClick={() => {
+                    navigator.clipboard.writeText(incomingText.text);
+                    clearIncomingText();
+                  }}
+                  className="flex-1 flex items-center justify-center gap-2 py-4 px-6 rounded-2xl bg-blue-500 hover:bg-blue-600 text-white font-semibold transition-colors"
+                >
+                  <Copy className="w-4 h-4" />
+                  Copy
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Incoming Offer Modal */}
       <AnimatePresence>
         {incomingOffer && (
@@ -532,14 +665,28 @@ export default function App() {
                   history.map((item) => (
                     <div key={item.id} className="p-4 bg-[var(--card-bg)] rounded-2xl border border-[var(--glass-border)] flex items-center gap-4">
                       <div className={`p-2 rounded-lg ${item.type === 'sent' ? 'bg-blue-500/10' : 'bg-green-500/10'}`}>
-                        <File className={`w-5 h-5 ${item.type === 'sent' ? 'text-blue-500' : 'text-green-500'}`} />
+                        {item.dataType === 'text' ? (
+                          <MessageSquare className={`w-5 h-5 ${item.type === 'sent' ? 'text-blue-500' : 'text-green-500'}`} />
+                        ) : (
+                          <File className={`w-5 h-5 ${item.type === 'sent' ? 'text-blue-500' : 'text-green-500'}`} />
+                        )}
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="font-medium text-sm truncate text-[var(--text-color)]">{item.name}</p>
                         <p className="text-[10px] text-[var(--secondary-text)]">
-                          {item.type === 'sent' ? `Sent to ${item.deviceName}` : `Received from ${item.deviceName}`} • {formatBytes(item.size)}
+                          {item.type === 'sent' ? `Sent to ${item.deviceName}` : `Received from ${item.deviceName}`} 
+                          {item.dataType !== 'text' && ` • ${formatBytes(item.size)}`}
                         </p>
                       </div>
+                      {item.dataType === 'text' && item.textContent && (
+                        <button 
+                          onClick={() => navigator.clipboard.writeText(item.textContent!)}
+                          className="p-2 bg-gray-100/10 hover:bg-gray-100/20 rounded-lg transition-colors"
+                          title="Copy text"
+                        >
+                          <Copy className="w-4 h-4 text-[var(--text-color)]" />
+                        </button>
+                      )}
                       <span className="text-[10px] text-[var(--secondary-text)] whitespace-nowrap">
                         {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>

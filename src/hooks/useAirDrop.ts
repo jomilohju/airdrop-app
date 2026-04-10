@@ -32,6 +32,8 @@ export interface HistoryItem {
   timestamp: number;
   type: 'sent' | 'received';
   deviceName: string;
+  dataType?: 'file' | 'text';
+  textContent?: string;
 }
 
 export function useAirDrop() {
@@ -88,6 +90,7 @@ export function useAirDrop() {
   });
   const [transferState, setTransferState] = useState<TransferState>({ status: 'idle', progress: 0 });
   const [incomingOffer, setIncomingOffer] = useState<{ caller: Device, offer: RTCSessionDescriptionInit } | null>(null);
+  const [incomingText, setIncomingText] = useState<{ text: string, sender: string } | null>(null);
 
   useEffect(() => {
     if (incomingOffer && !autoAccept) {
@@ -293,7 +296,19 @@ export function useAirDrop() {
     channel.onmessage = (event) => {
       if (typeof event.data === 'string') {
         const msg = JSON.parse(event.data);
-        if (msg.type === 'file-start') {
+        if (msg.type === 'text') {
+          setIncomingText({ text: msg.text, sender: remoteDeviceName });
+          addToHistory({
+            name: msg.text.length > 20 ? msg.text.substring(0, 20) + '...' : msg.text,
+            size: msg.text.length,
+            type: 'received',
+            deviceName: remoteDeviceName,
+            dataType: 'text',
+            textContent: msg.text
+          });
+          setTransferState({ status: 'completed', progress: 100 });
+          setTimeout(() => setTransferState({ status: 'idle', progress: 0 }), 3000);
+        } else if (msg.type === 'file-start') {
           expectedSizeRef.current = msg.size;
           expectedNameRef.current = msg.name;
           fileBufferRef.current = [];
@@ -331,7 +346,8 @@ export function useAirDrop() {
             name: expectedNameRef.current,
             size: expectedSizeRef.current,
             type: 'received',
-            deviceName: remoteDeviceName
+            deviceName: remoteDeviceName,
+            dataType: 'file'
           });
         }
       }
@@ -407,7 +423,8 @@ export function useAirDrop() {
                       name: file.name,
                       size: file.size,
                       type: 'sent',
-                      deviceName: targetDevice.name
+                      deviceName: targetDevice.name,
+                      dataType: 'file'
                     });
                     resolve();
                   }
@@ -425,6 +442,41 @@ export function useAirDrop() {
       }
 
       channel.send(JSON.stringify({ type: 'transfer-complete' }));
+      setTransferState({ status: 'completed', progress: 100 });
+      setTimeout(() => setTransferState({ status: 'idle', progress: 0 }), 3000);
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    socketRef.current.emit('offer', {
+      target: targetDevice.socketId,
+      offer,
+      caller: myDevice
+    });
+  }, [createPeerConnection, setupDataChannel, myDevice, addToHistory]);
+
+  const sendText = useCallback(async (targetDevice: Device, text: string) => {
+    if (!socketRef.current || !myDevice || !text) return;
+
+    setTransferState({ status: 'connecting', progress: 0 });
+
+    const pc = createPeerConnection(targetDevice.socketId);
+    peerConnectionRef.current = pc;
+
+    const channel = pc.createDataChannel('file-transfer');
+    setupDataChannel(channel, targetDevice.name);
+
+    channel.onopen = () => {
+      channel.send(JSON.stringify({ type: 'text', text }));
+      addToHistory({
+        name: text.length > 20 ? text.substring(0, 20) + '...' : text,
+        size: text.length,
+        type: 'sent',
+        deviceName: targetDevice.name,
+        dataType: 'text',
+        textContent: text
+      });
       setTransferState({ status: 'completed', progress: 100 });
       setTimeout(() => setTransferState({ status: 'idle', progress: 0 }), 3000);
     };
@@ -490,15 +542,22 @@ export function useAirDrop() {
     socketRef.current.emit('register', myDevice);
   }, [myDevice, isDiscoverable]);
 
+  const clearIncomingText = useCallback(() => {
+    setIncomingText(null);
+  }, []);
+
   return {
     devices,
     myDevice,
     transferState,
     incomingOffer,
+    incomingText,
     sendFiles,
+    sendText,
     acceptOffer,
     rejectOffer,
     refreshDevices,
+    clearIncomingText,
     updateMyName,
     isDiscoverable,
     toggleDiscoverable,
