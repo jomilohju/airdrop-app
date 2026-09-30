@@ -1,6 +1,0 @@
-{
-  "summary":  "Implementation plan for UI clean-up: removing penetration test buttons from dock and settings, removing the discoverable status pill and tagline in the header, streamlining Auto-Accept and Sound settings labels, and enabling backdrop click-outside dismiss for the history modal.",
-  "updatedAt":  "2026-09-30T14:12:45.833925292Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}

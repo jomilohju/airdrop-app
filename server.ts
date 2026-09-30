@@ -58,24 +58,12 @@ async function startServer() {
       io.to(target).emit("ice-candidate", { candidate, sender: socket.id });
     });
 
-    // Network Diagnostics Ping Check
-    socket.on("ping-check", (clientTimestamp, callback) => {
-      if (typeof callback === "function") {
-        callback({ serverTimestamp: Date.now(), clientTimestamp });
-      }
-    });
-
     socket.on("disconnect", () => {
       if (devices.has(socket.id)) {
         io.emit("device-left", socket.id);
         devices.delete(socket.id);
       }
     });
-  });
-
-  // Health and ping diagnostics endpoint
-  app.get("/api/ping", (req, res) => {
-    res.json({ ok: true, timestamp: Date.now(), status: "operational" });
   });
 
   // Vite middleware for development

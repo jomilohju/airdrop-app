@@ -3,36 +3,11 @@ import { io, Socket } from 'socket.io-client';
 import { v4 as uuidv4 } from 'uuid';
 import { Device as CapacitorDevice } from '@capacitor/device';
 import { Capacitor } from '@capacitor/core';
-import { 
-  sanitizeFileName, 
-  sanitizeDeviceName, 
-  sanitizeText, 
-  validateIncomingMessage, 
-  isDangerousFile 
-} from '../utils/securityAudit';
 
-// Use custom env var, or current origin for web, or production URL for native apps
-const rawSocketUrl = (import.meta.env.VITE_SOCKET_URL as string) || 
-  (import.meta.env.VITE_DropTop as string) || 
-  (Capacitor.isNativePlatform() 
-    ? 'https://ais-pre-agdlszchovxizrfnymytsj-260210615413.europe-west2.run.app' 
-    : window.location.origin);
-export const SOCKET_URL = rawSocketUrl ? rawSocketUrl.replace(/\/+$/, '') : window.location.origin;
-
-export interface DiagnosticResult {
-  latencyMs: number | null;
-  minLatencyMs: number | null;
-  maxLatencyMs: number | null;
-  jitterMs: number | null;
-  serverUrl: string;
-  socketConnected: boolean;
-  socketId: string | null;
-  rating: 'excellent' | 'good' | 'fair' | 'poor' | 'offline';
-  timestamp: number;
-  samples: number[];
-  protocol: 'websocket' | 'http-fallback' | 'none';
-  error?: string;
-}
+// Use the current window origin for web, or the production URL for native apps
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (Capacitor.isNativePlatform() 
+  ? 'https://drop-top.onrender.com' 
+  : window.location.origin);
 
 export interface Device {
   id: string;
@@ -44,13 +19,10 @@ export interface Device {
 export interface TransferState {
   status: 'idle' | 'connecting' | 'transferring' | 'completed' | 'error';
   progress: number;
-  batchProgress?: number;
   fileName?: string;
   fileSize?: number;
   currentFileIndex?: number;
   totalFiles?: number;
-  totalBatchSize?: number;
-  totalBytesTransferred?: number;
 }
 
 export interface HistoryItem {
@@ -140,9 +112,6 @@ export function useAirDrop() {
   const receivedSizeRef = useRef<number>(0);
   const expectedSizeRef = useRef<number>(0);
   const expectedNameRef = useRef<string>('');
-  const expectedMimeTypeRef = useRef<string>('');
-  const totalBatchSizeRef = useRef<number>(0);
-  const totalBytesReceivedRef = useRef<number>(0);
 
   const addToHistory = useCallback((item: Omit<HistoryItem, 'id' | 'timestamp'>) => {
     const newItem: HistoryItem = {
@@ -209,20 +178,11 @@ export function useAirDrop() {
       socketRef.current = socket;
 
       socket.on('connect', () => {
-        setIsConnected(true);
         device.socketId = socket.id!;
         setMyDevice({ ...device });
         if (isDiscoverable) {
           socket.emit('register', device);
         }
-      });
-
-      socket.on('disconnect', () => {
-        setIsConnected(false);
-      });
-
-      socket.on('connect_error', () => {
-        setIsConnected(false);
       });
 
       socket.on('current-devices', (currentDevices: Device[]) => {
@@ -298,10 +258,9 @@ export function useAirDrop() {
 
   const updateMyName = useCallback((newName: string) => {
     if (!myDevice || !socketRef.current) return;
-    const sanitizedName = sanitizeDeviceName(newName);
-    const updatedDevice = { ...myDevice, name: sanitizedName };
+    const updatedDevice = { ...myDevice, name: newName };
     setMyDevice(updatedDevice);
-    localStorage.setItem('airdrop_custom_name', sanitizedName);
+    localStorage.setItem('airdrop_custom_name', newName);
     if (isDiscoverable) {
       socketRef.current.emit('register', updatedDevice);
     }
@@ -333,136 +292,61 @@ export function useAirDrop() {
 
   const setupDataChannel = useCallback((channel: RTCDataChannel, remoteDeviceName: string) => {
     channel.binaryType = 'arraybuffer';
-
-    channel.onerror = (err) => {
-      console.warn('DataChannel error:', err);
-      fileBufferRef.current = [];
-      setTransferState({ status: 'error', progress: 0 });
-    };
-
-    channel.onclose = () => {
-      fileBufferRef.current = [];
-    };
-
+    
     channel.onmessage = (event) => {
       if (typeof event.data === 'string') {
-        const validation = validateIncomingMessage(event.data);
-        if (!validation.isValid || !validation.parsed) {
-          console.warn('Rejected malformed or unsafe packet:', validation.error);
-          return;
-        }
-
-        const msg = validation.parsed;
-
+        const msg = JSON.parse(event.data);
         if (msg.type === 'text') {
-          const sanitizedTxt = sanitizeText(msg.text);
-          const sanitizedSender = sanitizeDeviceName(remoteDeviceName);
-          setIncomingText({ text: sanitizedTxt, sender: sanitizedSender });
+          setIncomingText({ text: msg.text, sender: remoteDeviceName });
           addToHistory({
-            name: sanitizedTxt.length > 20 ? sanitizedTxt.substring(0, 20) + '...' : sanitizedTxt,
-            size: sanitizedTxt.length,
+            name: msg.text.length > 20 ? msg.text.substring(0, 20) + '...' : msg.text,
+            size: msg.text.length,
             type: 'received',
-            deviceName: sanitizedSender,
+            deviceName: remoteDeviceName,
             dataType: 'text',
-            textContent: sanitizedTxt
+            textContent: msg.text
           });
-          setTransferState({ status: 'completed', progress: 100, batchProgress: 100 });
+          setTransferState({ status: 'completed', progress: 100 });
           setTimeout(() => setTransferState({ status: 'idle', progress: 0 }), 3000);
-        } else if (msg.type === 'batch-start') {
-          totalBatchSizeRef.current = typeof msg.totalBatchSize === 'number' ? msg.totalBatchSize : 0;
-          totalBytesReceivedRef.current = 0;
-          setTransferState(prev => ({
-            ...prev,
-            status: 'transferring',
-            progress: 0,
-            batchProgress: 0,
-            totalFiles: msg.totalFiles,
-            currentFileIndex: 0,
-            totalBatchSize: totalBatchSizeRef.current,
-            totalBytesTransferred: 0
-          }));
         } else if (msg.type === 'file-start') {
-          const safeName = sanitizeFileName(msg.name);
-          const safeSize = Math.min(typeof msg.size === 'number' ? msg.size : 0, 2147483648);
-          expectedSizeRef.current = safeSize;
-          expectedNameRef.current = safeName;
-          expectedMimeTypeRef.current = typeof msg.mimeType === 'string' ? msg.mimeType : '';
+          expectedSizeRef.current = msg.size;
+          expectedNameRef.current = msg.name;
           fileBufferRef.current = [];
           receivedSizeRef.current = 0;
-
-          if (isDangerousFile(safeName)) {
-            console.warn(`[SECURITY WARNING] Incoming file "${safeName}" contains executable extension.`);
-          }
-
           setTransferState(prev => ({ 
             ...prev, 
             status: 'transferring', 
             progress: 0, 
-            fileName: safeName, 
-            fileSize: safeSize, 
-            currentFileIndex: typeof msg.index === 'number' ? msg.index : 0,
-            totalFiles: typeof msg.total === 'number' ? msg.total : 1,
-            totalBatchSize: totalBatchSizeRef.current || safeSize,
-            totalBytesTransferred: totalBytesReceivedRef.current
+            fileName: msg.name,
+            fileSize: msg.size,
+            currentFileIndex: msg.index,
+            totalFiles: msg.total
           }));
         } else if (msg.type === 'transfer-complete') {
-          setTransferState({ status: 'completed', progress: 100, batchProgress: 100 });
+          setTransferState({ status: 'completed', progress: 100 });
           setTimeout(() => setTransferState({ status: 'idle', progress: 0 }), 3000);
         }
-      } else if (event.data instanceof ArrayBuffer) {
-        // Chunk boundary attack check
-        if (event.data.byteLength > 262144) {
-          console.error('[SECURITY REJECTION] Single chunk exceeds 256KB threshold.');
-          fileBufferRef.current = [];
-          setTransferState({ status: 'error', progress: 0 });
-          return;
-        }
-
-        // Buffer overflow attack check
-        if (receivedSizeRef.current + event.data.byteLength > expectedSizeRef.current + 65536) {
-          console.error('[SECURITY REJECTION] Buffer overflow detected: received bytes exceed expected file size.');
-          fileBufferRef.current = [];
-          setTransferState({ status: 'error', progress: 0 });
-          return;
-        }
-
+      } else {
         fileBufferRef.current.push(event.data);
         receivedSizeRef.current += event.data.byteLength;
-        totalBytesReceivedRef.current += event.data.byteLength;
         
-        const fileProgress = expectedSizeRef.current > 0 
-          ? Math.min(100, Math.round((receivedSizeRef.current / expectedSizeRef.current) * 100)) 
-          : 0;
-        const batchProgress = totalBatchSizeRef.current > 0
-          ? Math.min(100, Math.round((totalBytesReceivedRef.current / totalBatchSizeRef.current) * 100))
-          : fileProgress;
+        const progress = Math.round((receivedSizeRef.current / expectedSizeRef.current) * 100);
+        setTransferState(prev => ({ ...prev, progress }));
 
-        setTransferState(prev => ({ 
-          ...prev, 
-          progress: fileProgress, 
-          batchProgress,
-          totalBytesTransferred: totalBytesReceivedRef.current,
-          totalBatchSize: totalBatchSizeRef.current || expectedSizeRef.current
-        }));
-
-        if (receivedSizeRef.current >= expectedSizeRef.current && expectedSizeRef.current > 0) {
-          const mimeType = expectedMimeTypeRef.current || 'application/octet-stream';
-          const blob = new Blob(fileBufferRef.current, { type: mimeType });
+        if (receivedSizeRef.current === expectedSizeRef.current) {
+          const blob = new Blob(fileBufferRef.current);
           const url = URL.createObjectURL(blob);
-          const safeDownloadName = sanitizeFileName(expectedNameRef.current);
           const a = document.createElement('a');
           a.href = url;
-          a.download = safeDownloadName;
-          document.body.appendChild(a);
+          a.download = expectedNameRef.current;
           a.click();
-          document.body.removeChild(a);
-          setTimeout(() => URL.revokeObjectURL(url), 10000);
+          URL.revokeObjectURL(url);
           
           addToHistory({
-            name: safeDownloadName,
+            name: expectedNameRef.current,
             size: expectedSizeRef.current,
             type: 'received',
-            deviceName: sanitizeDeviceName(remoteDeviceName),
+            deviceName: remoteDeviceName,
             dataType: 'file'
           });
         }
@@ -475,17 +359,7 @@ export function useAirDrop() {
   const sendFiles = useCallback(async (targetDevice: Device, files: File[]) => {
     if (!socketRef.current || !myDevice || files.length === 0) return;
 
-    const totalBatchBytes = files.reduce((acc, f) => acc + f.size, 0);
-
-    setTransferState({ 
-      status: 'connecting', 
-      progress: 0, 
-      batchProgress: 0,
-      totalFiles: files.length, 
-      currentFileIndex: 0,
-      totalBatchSize: totalBatchBytes,
-      totalBytesTransferred: 0
-    });
+    setTransferState({ status: 'connecting', progress: 0, totalFiles: files.length, currentFileIndex: 0 });
 
     const pc = createPeerConnection(targetDevice.socketId);
     peerConnectionRef.current = pc;
@@ -494,33 +368,21 @@ export function useAirDrop() {
     setupDataChannel(channel, targetDevice.name);
 
     channel.onopen = async () => {
-      channel.send(JSON.stringify({ 
-        type: 'batch-start', 
-        totalFiles: files.length, 
-        totalBatchSize: totalBatchBytes 
-      }));
-
-      let cumulativeBytesTransferred = 0;
-
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const safeName = sanitizeFileName(file.name);
-
         setTransferState(prev => ({ 
           ...prev, 
           status: 'transferring', 
           progress: 0, 
-          fileName: safeName, 
+          fileName: file.name, 
           fileSize: file.size,
           currentFileIndex: i,
-          totalFiles: files.length,
-          totalBatchSize: totalBatchBytes,
-          totalBytesTransferred: cumulativeBytesTransferred
+          totalFiles: files.length
         }));
         
         channel.send(JSON.stringify({ 
           type: 'file-start', 
-          name: safeName, 
+          name: file.name, 
           size: file.size, 
           mimeType: file.type,
           index: i,
@@ -528,7 +390,9 @@ export function useAirDrop() {
         }));
 
         await new Promise<void>((resolve, reject) => {
+          // Increased chunk size to 128KB for much faster transfers
           const chunkSize = 131072; 
+          // Set a higher buffer threshold (1MB) to keep the network saturated
           channel.bufferedAmountLowThreshold = 1048576;
           let offset = 0;
 
@@ -539,23 +403,11 @@ export function useAirDrop() {
             reader.onload = (e) => {
               if (channel.readyState === 'open') {
                 try {
-                  const chunk = e.target?.result as ArrayBuffer;
-                  channel.send(chunk);
+                  channel.send(e.target?.result as ArrayBuffer);
                   offset += chunkSize;
-                  cumulativeBytesTransferred += chunk.byteLength;
                   
-                  const fileProgress = Math.min(100, Math.round((offset / file.size) * 100));
-                  const batchProgress = totalBatchBytes > 0 
-                    ? Math.min(100, Math.round((cumulativeBytesTransferred / totalBatchBytes) * 100))
-                    : fileProgress;
-
-                  setTransferState(prev => ({ 
-                    ...prev, 
-                    progress: fileProgress,
-                    batchProgress,
-                    totalBytesTransferred: cumulativeBytesTransferred,
-                    totalBatchSize: totalBatchBytes
-                  }));
+                  const progress = Math.round((offset / file.size) * 100);
+                  setTransferState(prev => ({ ...prev, progress: Math.min(progress, 100) }));
 
                   if (offset < file.size) {
                     if (channel.bufferedAmount > channel.bufferedAmountLowThreshold) {
@@ -568,10 +420,10 @@ export function useAirDrop() {
                     }
                   } else {
                     addToHistory({
-                      name: safeName,
+                      name: file.name,
                       size: file.size,
                       type: 'sent',
-                      deviceName: sanitizeDeviceName(targetDevice.name),
+                      deviceName: targetDevice.name,
                       dataType: 'file'
                     });
                     resolve();
@@ -590,13 +442,7 @@ export function useAirDrop() {
       }
 
       channel.send(JSON.stringify({ type: 'transfer-complete' }));
-      setTransferState({ 
-        status: 'completed', 
-        progress: 100, 
-        batchProgress: 100,
-        totalBytesTransferred: totalBatchBytes,
-        totalBatchSize: totalBatchBytes
-      });
+      setTransferState({ status: 'completed', progress: 100 });
       setTimeout(() => setTransferState({ status: 'idle', progress: 0 }), 3000);
     };
 
@@ -700,128 +546,6 @@ export function useAirDrop() {
     setIncomingText(null);
   }, []);
 
-  const [diagnosticResult, setDiagnosticResult] = useState<DiagnosticResult | null>(null);
-  const [isDiagnosing, setIsDiagnosing] = useState(false);
-
-  const runDiagnostics = useCallback(async (): Promise<DiagnosticResult> => {
-    setIsDiagnosing(true);
-    const serverUrl = SOCKET_URL;
-    const socket = socketRef.current;
-
-    // 1. Try WebSocket Ping if connected or socket exists
-    if (socket && socket.connected) {
-      try {
-        const samples: number[] = [];
-        for (let i = 0; i < 3; i++) {
-          const start = performance.now();
-          const rtt = await new Promise<number>((resolve, reject) => {
-            const timer = setTimeout(() => reject(new Error('Signaling ping timed out (3s)')), 3000);
-            socket.emit('ping-check', Date.now(), () => {
-              clearTimeout(timer);
-              resolve(Math.max(1, Math.round(performance.now() - start)));
-            });
-          });
-          samples.push(rtt);
-          if (i < 2) {
-            await new Promise((r) => setTimeout(r, 60));
-          }
-        }
-
-        const avg = Math.round(samples.reduce((a, b) => a + b, 0) / samples.length);
-        const min = Math.min(...samples);
-        const max = Math.max(...samples);
-        const jitter = samples.length > 1
-          ? Math.round(samples.slice(1).reduce((acc, curr, idx) => acc + Math.abs(curr - samples[idx]), 0) / (samples.length - 1))
-          : 0;
-
-        let rating: DiagnosticResult['rating'] = 'excellent';
-        if (avg > 300) rating = 'poor';
-        else if (avg > 150) rating = 'fair';
-        else if (avg > 75) rating = 'good';
-
-        const result: DiagnosticResult = {
-          latencyMs: avg,
-          minLatencyMs: min,
-          maxLatencyMs: max,
-          jitterMs: jitter,
-          serverUrl,
-          socketConnected: true,
-          socketId: socket.id || null,
-          rating,
-          timestamp: Date.now(),
-          samples,
-          protocol: 'websocket'
-        };
-
-        setDiagnosticResult(result);
-        setIsDiagnosing(false);
-        return result;
-      } catch (err) {
-        console.warn('Socket ping failed or timed out:', err);
-      }
-    }
-
-    // 2. Fallback: HTTP /api/ping test
-    try {
-      const start = performance.now();
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3500);
-      const res = await fetch(`${serverUrl}/api/ping`, {
-        signal: controller.signal,
-        cache: 'no-store'
-      });
-      clearTimeout(timeout);
-
-      if (res.ok) {
-        const rtt = Math.max(1, Math.round(performance.now() - start));
-        let rating: DiagnosticResult['rating'] = 'good';
-        if (rtt > 300) rating = 'poor';
-        else if (rtt > 150) rating = 'fair';
-        else if (rtt > 75) rating = 'good';
-        else rating = 'excellent';
-
-        const result: DiagnosticResult = {
-          latencyMs: rtt,
-          minLatencyMs: rtt,
-          maxLatencyMs: rtt,
-          jitterMs: 0,
-          serverUrl,
-          socketConnected: socket?.connected ?? false,
-          socketId: socket?.id || null,
-          rating,
-          timestamp: Date.now(),
-          samples: [rtt],
-          protocol: 'http-fallback',
-          error: socket?.connected ? undefined : 'Connected via HTTP, but WebSocket is still establishing or blocked.'
-        };
-        setDiagnosticResult(result);
-        setIsDiagnosing(false);
-        return result;
-      }
-    } catch (httpErr) {
-      console.warn('HTTP ping fallback also failed:', httpErr);
-    }
-
-    // 3. Offline / Unreachable
-    const offlineResult: DiagnosticResult = {
-      latencyMs: null,
-      minLatencyMs: null,
-      maxLatencyMs: null,
-      jitterMs: null,
-      serverUrl,
-      socketConnected: false,
-      socketId: null,
-      rating: 'offline',
-      timestamp: Date.now(),
-      samples: [],
-      protocol: 'none',
-      error: 'Cannot reach signaling server. Check your network or VITE_DropTop / VITE_SOCKET_URL.'
-    };
-    setDiagnosticResult(offlineResult);
-    setIsDiagnosing(false);
-    return offlineResult;
-  }, []);
-
   return {
     devices,
     myDevice,
@@ -844,11 +568,6 @@ export function useAirDrop() {
     theme,
     updateTheme,
     history,
-    clearHistory,
-    isConnected,
-    runDiagnostics,
-    diagnosticResult,
-    isDiagnosing,
-    serverUrl: SOCKET_URL
+    clearHistory
   };
 }
