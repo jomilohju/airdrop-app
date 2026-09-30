@@ -6,7 +6,7 @@ import { Capacitor } from '@capacitor/core';
 
 // Use the current window origin for web, or the production URL for native apps
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || (Capacitor.isNativePlatform() 
-  ? 'https://ais-pre-agdlszchovxizrfnymytsj-260210615413.europe-west2.run.app' 
+  ? 'https://drop-top.onrender.com' 
   : window.location.origin);
 
 export interface Device {

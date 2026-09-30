@@ -1,7 +1,7 @@
 {
-  "name": "AirDrop Clone",
-  "short_name": "AirDrop",
-  "description": "Peer-to-peer file sharing for the web",
+  "name": "DropTop",
+  "short_name": "DropTop",
+  "description": "Lossless peer-to-peer file and text sharing across all devices in real-time.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
